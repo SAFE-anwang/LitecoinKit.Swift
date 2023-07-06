@@ -1,9 +1,9 @@
-import Combine
 import UIKit
+import RxSwift
 import BitcoinCore
 
 class ReceiveController: UIViewController {
-    private var cancellables = Set<AnyCancellable>()
+    private let disposeBag = DisposeBag()
 
     @IBOutlet weak var addressLabel: UILabel?
 
@@ -18,12 +18,13 @@ class ReceiveController: UIViewController {
         addressLabel?.layer.cornerRadius = 8
         addressLabel?.clipsToBounds = true
 
-        Manager.shared.adapterSubject
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] in
+        Manager.shared.adapterSignal
+                .subscribeOn(ConcurrentDispatchQueueScheduler(qos: .background))
+                .observeOn(MainScheduler.instance)
+                .subscribe(onNext: { [weak self] in
                     self?.updateAdapters()
-                }
-                .store(in: &cancellables)
+                })
+                .disposed(by: disposeBag)
 
         updateAdapters()
         segmentedControl.addTarget(self, action: #selector(onSegmentChanged), for: .valueChanged)
@@ -62,7 +63,7 @@ class ReceiveController: UIViewController {
     @IBAction func onAddressTypeChanged(_ sender: Any) {
         updateAddress()
     }
-
+    
     @IBAction func copyToClipboard() {
         if let address = addressLabel?.text?.trimmingCharacters(in: .whitespaces) {
             UIPasteboard.general.setValue(address, forPasteboardType: "public.plain-text")

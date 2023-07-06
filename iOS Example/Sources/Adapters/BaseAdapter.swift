@@ -1,6 +1,6 @@
 import Foundation
-import Combine
 import BitcoinCore
+import RxSwift
 
 class BaseAdapter {
     var feeRate: Int { 3 }
@@ -11,10 +11,10 @@ class BaseAdapter {
 
     private let abstractKit: AbstractKit
 
-    let lastBlockSubject = PassthroughSubject<Void, Never>()
-    let syncStateSubject = PassthroughSubject<Void, Never>()
-    let balanceSubject = PassthroughSubject<Void, Never>()
-    let transactionsSubject = PassthroughSubject<Void, Never>()
+    let lastBlockSignal = Signal()
+    let syncStateSignal = Signal()
+    let balanceSignal = Signal()
+    let transactionsSignal = Signal()
 
     init(name: String, coinCode: String, abstractKit: AbstractKit) {
         self.name = name
@@ -68,10 +68,12 @@ class BaseAdapter {
         return NSDecimalNumber(decimal: coinValue).rounding(accordingToBehavior: handler).intValue
     }
 
-    func transactions(fromUid: String?, type: TransactionFilterType? = nil, limit: Int) -> [TransactionRecord] {
+    func transactionsSingle(fromUid: String?, type: TransactionFilterType? = nil, limit: Int) -> Single<[TransactionRecord]> {
         abstractKit.transactions(fromUid: fromUid, type: type, limit: limit)
-                .compactMap {
-                    transactionRecord(fromTransaction: $0)
+                .map { [weak self] transactions -> [TransactionRecord] in
+                    transactions.compactMap {
+                        self?.transactionRecord(fromTransaction: $0)
+                    }
                 }
     }
 
@@ -79,32 +81,28 @@ class BaseAdapter {
 
 extension BaseAdapter {
 
-    var lastBlockPublisher: AnyPublisher<Void, Never> {
-        lastBlockSubject
-                .throttle(for: .milliseconds(200), scheduler: RunLoop.current, latest: true)
-                .eraseToAnyPublisher()
+    var lastBlockObservable: Observable<Void> {
+        lastBlockSignal.asObservable().throttle(DispatchTimeInterval.milliseconds(200), scheduler: ConcurrentDispatchQueueScheduler(qos: .userInitiated))
     }
 
-    var syncStatePublisher: AnyPublisher<Void, Never> {
-        syncStateSubject
-                .throttle(for: .milliseconds(200), scheduler: RunLoop.current, latest: true)
-                .eraseToAnyPublisher()
+    var syncStateObservable: Observable<Void> {
+        syncStateSignal.asObservable().throttle(DispatchTimeInterval.milliseconds(200), scheduler: ConcurrentDispatchQueueScheduler(qos: .userInitiated))
     }
 
-    var balancePublisher: AnyPublisher<Void, Never> {
-        balanceSubject.eraseToAnyPublisher()
+    var balanceObservable: Observable<Void> {
+        balanceSignal.asObservable()
     }
 
-    var transactionsPublisher: AnyPublisher<Void, Never> {
-        transactionsSubject.eraseToAnyPublisher()
+    var transactionsObservable: Observable<Void> {
+        transactionsSignal.asObservable()
     }
 
     func start() {
-        abstractKit.start()
+        self.abstractKit.start()
     }
 
     func refresh() {
-        abstractKit.start()
+        self.abstractKit.start()
     }
 
     var spendableBalance: Decimal {
@@ -137,9 +135,19 @@ extension BaseAdapter {
         }
     }
 
-    func send(to address: String, amount: Decimal, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData] = [:]) throws {
+    func sendSingle(to address: String, amount: Decimal, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData] = [:]) -> Single<Void> {
         let satoshiAmount = convertToSatoshi(value: amount)
-        _ = try abstractKit.send(to: address, value: satoshiAmount, feeRate: feeRate, sortType: sortType, pluginData: pluginData)
+
+        return Single.create { [unowned self] observer in
+            do {
+                _ = try self.abstractKit.send(to: address, value: satoshiAmount, feeRate: self.feeRate, sortType: sortType, pluginData: pluginData)
+                observer(.success(()))
+            } catch {
+                observer(.error(error))
+            }
+
+            return Disposables.create()
+        }
     }
 
     func availableBalance(for address: String?, pluginData: [UInt8: IPluginData] = [:]) -> Decimal {
